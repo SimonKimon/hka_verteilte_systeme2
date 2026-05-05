@@ -15,7 +15,7 @@ base_list = rpc.DBList({'foo'})
 
 
 def handle_result(result):  # Wird aufgerufen, erst wenn das Ergebnis vom Server kommt
-    print("\nClient: Callback aufgerufen! Ergebnis vom Server erhalten.")
+    print("\nClient: Callback aufgerufen. Ergebnis vom Server erhalten.")
     print("Result: {}".format(result.value))
 
 
