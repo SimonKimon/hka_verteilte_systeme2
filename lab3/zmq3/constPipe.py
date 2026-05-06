@@ -1,4 +1,16 @@
+# Farmer/Worker 
 SRC1 = "127.0.0.1"
 SRC2 = "127.0.0.1"
 PORT1 = "50011"
 PORT2 = "50012"
+
+# Splitter -> Mapper
+SPLITTER_HOST = "127.0.0.1"
+SPLITTER_PORT = "6000"
+
+# Mapper -> Reducer
+REDUCER1_HOST = "127.0.0.1"
+REDUCER1_PORT = "6001"
+
+REDUCER2_HOST = "127.0.0.1"
+REDUCER2_PORT = "6002"
