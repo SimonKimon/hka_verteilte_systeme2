@@ -150,9 +150,22 @@ class ChordNode:
                 self.logger.info("Node {:04n} received LOOKUP {:04n} from {:04n}."
                                  .format(self.node_id, int(request[1]), int(sender)))
 
-                # look up and return local successor 
+                # find the best local next hop toward the key
                 next_id: int = self.local_successor_node(request[1])
-                self.channel.send_to([sender], (constChord.LOOKUP_REP, next_id))
+
+                if next_id == self.node_id:
+                    # This node is responsible for the key - send answer directly
+                    self.channel.send_to([sender], (constChord.LOOKUP_REP, next_id))
+                else:
+                    # Forward the LOOKUP_REQ to the next best known node (recursive)
+                    self.channel.send_to([str(next_id)], (constChord.LOOKUP_REQ, request[1]))
+                    # Wait for the recursive reply - skip stale JOIN messages from bootstrapping
+                    while True:
+                        _, reply = self.channel.receive_from({str(next_id)})
+                        if isinstance(reply, tuple) and reply[0] == constChord.LOOKUP_REP:
+                            break
+                    # Forward the final answer back to the original sender
+                    self.channel.send_to([sender], reply)
 
                 # Finally do a sanity check
                 if not self.channel.exists(next_id):  # probe for existence
