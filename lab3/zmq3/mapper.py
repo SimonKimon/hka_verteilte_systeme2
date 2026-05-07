@@ -9,7 +9,7 @@ me = str(sys.argv[1])
 
 context = zmq.Context()
 
-# PULL-Socket mpfängt Sätze vom Splitter
+# PULL-Socket empfängt Sätze vom Splitter
 pull = context.socket(zmq.PULL)
 pull.connect("tcp://" + constPipe.SPLITTER_HOST + ":" + constPipe.SPLITTER_PORT)
 

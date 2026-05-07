@@ -9,6 +9,7 @@ sentences = [
     "Morgen spielt Bayern und PSG",
     "Bayern hat letzens 4:5 verloren",
     "Student empfindet die Pizza lecker",
+    "Wir lieben verteilte Systeme"
 ]
 
 context = zmq.Context()
