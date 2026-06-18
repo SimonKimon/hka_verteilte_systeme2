@@ -4,6 +4,10 @@ import time
 
 from constMutex import ENTER, RELEASE, ALLOW, ACTIVE
 
+HEARTBEAT = 'HEARTBEAT'
+FAILURE_TIMEOUT = 6
+HEARTBEAT_INTERVAL = 1
+
 
 class Process:
     """
@@ -32,8 +36,7 @@ class Process:
 
     <Message>: (Timestamp, Process_ID, <Request_Type>)
 
-    <Request Type>: ENTER | ALLOW  | RELEASE
-
+    <Request Type>: ENTER | ALLOW | RELEASE | HEARTBEAT
     """
 
     def __init__(self, chan):
@@ -47,6 +50,9 @@ class Process:
         self.peer_type = 'unassigned'  # A flag indicating behavior pattern
         self.logger = logging.getLogger("vs2lab.lab5.mutex.process.Process")
 
+        self.last_seen = {}
+        self.last_heartbeat_sent = 0.0
+
     def __mapid(self, id='-1'):
         # format channel member address
         if id == '-1':
@@ -55,7 +61,6 @@ class Process:
 
     def __cleanup_queue(self):
         if len(self.queue) > 0:
-            # self.queue.sort(key = lambda tup: tup[0])
             self.queue.sort()
             # There should never be old ALLOW messages at the head of the queue
             while self.queue[0][2] == ALLOW:
@@ -96,6 +101,25 @@ class Process:
             processes_with_later_message)
         return first_in_queue and all_have_answered
 
+    def __heartbeat(self):
+        now = time.time()
+        if now - self.last_heartbeat_sent < HEARTBEAT_INTERVAL or not self.other_processes:
+            return
+        self.last_heartbeat_sent = now
+        self.clock = self.clock + 1
+        self.channel.send_to(self.other_processes, (self.clock, self.process_id, HEARTBEAT))
+
+    def __check_alive(self):
+        now = time.time()
+        for pid in [p for p in self.other_processes
+                    if now - self.last_seen.get(p, now) > FAILURE_TIMEOUT]:
+            self.logger.warning("{} stuft {} als ABGESTUERZT ein und ignoriert ihn ab jetzt."
+                                .format(self.__mapid(), self.__mapid(pid)))
+            self.other_processes.remove(pid)
+            self.all_processes.remove(pid)
+            self.queue = [r for r in self.queue if r[1] != pid]
+        self.__cleanup_queue()
+
     def __receive(self):
         # Pick up any message
         _receive = self.channel.receive_from(self.other_processes, 3)
@@ -104,12 +128,14 @@ class Process:
 
             self.clock = max(self.clock, msg[0])  # Adjust clock value...
             self.clock = self.clock + 1  # ...and increment
+            self.last_seen[msg[1]] = time.time()
 
             self.logger.debug("{} received {} from {}.".format(
                 self.__mapid(),
                 "ENTER" if msg[2] == ENTER
                 else "ALLOW" if msg[2] == ALLOW
-                else "RELEASE", self.__mapid(msg[1])))
+                else "RELEASE" if msg[2] == RELEASE
+                else "HEARTBEAT", self.__mapid(msg[1])))
 
             if msg[2] == ENTER:
                 self.queue.append(msg)  # Append an ENTER request
@@ -131,6 +157,8 @@ class Process:
                                         self.__mapid(msg[1]),
                                         msg[2]), self.queue))))
 
+        self.__check_alive()
+
     def init(self, peer_name, peer_type):
         self.channel.bind(self.process_id)
 
@@ -144,11 +172,17 @@ class Process:
         self.peer_name = peer_name  # assign peer name
         self.peer_type = peer_type  # assign peer behavior
 
+        now = time.time()
+        self.last_seen = {pid: now for pid in self.other_processes}
+        self.last_heartbeat_sent = now
+
         self.logger.info("{} joined channel as {}.".format(
             peer_name, self.__mapid()))
 
     def run(self):
         while True:
+            self.__heartbeat()
+
             # Enter the critical section if
             # 1) there are more than one process left and
             # 2) this peer has active behavior and
@@ -161,6 +195,7 @@ class Process:
 
                 self.__request_to_enter()
                 while not self.__allowed_to_enter():
+                    self.__heartbeat()
                     self.__receive()
 
                 # Stay in CS for some time ...
