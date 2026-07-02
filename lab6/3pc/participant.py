@@ -40,20 +40,16 @@ class Participant:
         return min(participants, key=lambda p: int(p))
 
     @staticmethod
-    def _termination_decision(observed_states):
-        """
-        Decide final outcome from observed participant states.
+    def _termination_decision(self_state):
+        if self_state in {'PRECOMMIT', 'COMMIT'}:
+            return GLOBAL_COMMIT
 
-        Rules used for this lab-focused simplified termination:
-        - any COMMIT observed => GLOBAL_COMMIT
-        - else any PRECOMMIT observed => GLOBAL_COMMIT
-        - else => GLOBAL_ABORT
-        """
-        if 'COMMIT' in observed_states:
-            return GLOBAL_COMMIT
-        if 'PRECOMMIT' in observed_states:
-            return GLOBAL_COMMIT
-        return GLOBAL_ABORT
+        if self_state in {'WAIT', 'READY', 'ABORT', 'INIT', 'NEW'}:
+            return GLOBAL_ABORT
+
+        raise AssertionError(f'Unexpected leader state {self_state}')
+    
+
 
     def _participant_termination_after_coordinator_failure(self):
         """
@@ -110,7 +106,7 @@ class Participant:
                 # Concurrent requests are possible; answer with own state.
                 self.channel.send_to({sender}, (STATE_REPORT, self.state))
 
-        decision = self._termination_decision(observed_states)
+        decision = self._termination_decision(self.state)
         self.logger.info(
             'New coordinator %s collected states %s and broadcasts %s.',
             self.participant,
