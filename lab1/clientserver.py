@@ -22,7 +22,7 @@ class Server:
     # In-Memory Telefon-Datenbank als Dictionary
     phonebook = {
         "Radek":    "0721-111111",
-        "Pius":     "0721-222222",
+        "Pius":    "0721-222222",
         "Joel":     "0721-333333",
         "Philipp":  "0721-444444",
         "Simon":    "0721-555555"
