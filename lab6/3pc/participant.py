@@ -5,7 +5,7 @@ import stablelog
 
 from const3PC import VOTE_REQUEST, PREPARE_COMMIT, GLOBAL_COMMIT, GLOBAL_ABORT
 from const3PC import VOTE_COMMIT, VOTE_ABORT, READY_COMMIT
-from const3PC import NEED_STATE, STATE_REPORT
+from const3PC import STATE_REPORT
 from const3PC import LOCAL_SUCCESS, LOCAL_ABORT
 from const3PC import TIMEOUT
 
@@ -39,24 +39,39 @@ class Participant:
         """Deterministic leader election: participant with smallest numeric id."""
         return min(participants, key=lambda p: int(p))
 
+    # Progression of the 3PC participant states (higher == "later").
+    # ABORT/COMMIT are terminal and never reach the termination protocol.
+    _STATE_ORDER = {'NEW': 0, 'INIT': 0, 'READY': 1, 'PRECOMMIT': 2, 'COMMIT': 3}
+
+    @classmethod
+    def _is_earlier(cls, state, other):
+        """True if `state` is strictly before `other` in the 3PC progression."""
+        return cls._STATE_ORDER.get(state, 0) < cls._STATE_ORDER.get(other, 0)
+
     @staticmethod
-    def _termination_decision(self_state):
-        if self_state in {'PRECOMMIT', 'COMMIT'}:
+    def _termination_decision(leader_state):
+        """
+        Final outcome, decided by the new coordinator P_k from ITS OWN state
+        (README 3.2.2.b, cases 1-3). P_k is a participant here, so its 'READY'
+        corresponds to the coordinator state 'WAIT' in the spec.
+
+        - PRECOMMIT / COMMIT  -> GLOBAL_COMMIT  (cases 2 and 3-commit)
+        - READY / ABORT / ... -> GLOBAL_ABORT   (cases 1 and 3-abort)
+        """
+        if leader_state in {'PRECOMMIT', 'COMMIT'}:
             return GLOBAL_COMMIT
-
-        if self_state in {'WAIT', 'READY', 'ABORT', 'INIT', 'NEW'}:
+        if leader_state in {'READY', 'WAIT', 'ABORT', 'INIT', 'NEW'}:
             return GLOBAL_ABORT
-
-        raise AssertionError(f'Unexpected leader state {self_state}')
-    
+        raise AssertionError(f'Unexpected leader state {leader_state}')
 
 
     def _participant_termination_after_coordinator_failure(self):
         """
-        Handle coordinator crash by deterministic leader election.
+        Terminate the transaction after a coordinator crash (README 3.2.2.b).
 
-        All active participants compute the same leader (smallest id).
-        The leader collects state reports and broadcasts the final decision.
+        A new coordinator P_k is elected deterministically (smallest id). P_k
+        announces its own state; the elected coordinator then decides purely
+        from that state and broadcasts the global outcome.
         """
         all_participants = self.channel.subgroup('participant')
         leader = self._leader_of(all_participants)
@@ -67,54 +82,76 @@ class Participant:
             leader,
         )
 
-        # I am not leader: report my local state and wait for final decision.
-        if self.participant != leader:
-            self.channel.send_to({leader}, (STATE_REPORT, self.state))
+        if self.participant == leader:
+            return self._terminate_as_new_coordinator(all_participants)
+        return self._terminate_as_follower(leader, all_participants)
 
-            while True:
-                msg = self.channel.receive_from(all_participants, TIMEOUT * 3)
-
-                if not msg:
-                    # Fallback under partial synchrony: PRECOMMIT implies commit,
-                    # all earlier states abort.
-                    return GLOBAL_COMMIT if self.state == 'PRECOMMIT' else GLOBAL_ABORT
-
-                payload = msg[1]
-                if payload in [GLOBAL_COMMIT, GLOBAL_ABORT]:
-                    return payload
-
-                if isinstance(payload, tuple) and payload[0] == NEED_STATE:
-                    self.channel.send_to({msg[0]}, (STATE_REPORT, self.state))
-
-        # I am leader: request reports, decide, broadcast outcome.
+    def _terminate_as_new_coordinator(self, all_participants):
+        """New coordinator P_k: announce state, then decide and broadcast."""
         others = set(all_participants) - {self.participant}
-        self.channel.send_to(others, (NEED_STATE, self.state))
 
-        observed_states = {self.state}
-        yet_to_receive = set(others)
+        # P_k sends its state to all P_i (README 3.2.2.b).
+        self.channel.send_to(others, (STATE_REPORT, self.state))
 
-        while len(yet_to_receive) > 0:
+        # Collect the acknowledgements ("senden entsprechende Nachrichten an
+        # P_k"). Late/dead nodes are ignored (single-failure assumption).
+        pending = set(others)
+        while pending:
             msg = self.channel.receive_from(all_participants, TIMEOUT * 2)
             if not msg:
                 break
-
             sender, payload = msg
             if isinstance(payload, tuple) and payload[0] == STATE_REPORT:
-                observed_states.add(payload[1])
-                yet_to_receive.discard(sender)
-            elif isinstance(payload, tuple) and payload[0] == NEED_STATE:
-                # Concurrent requests are possible; answer with own state.
-                self.channel.send_to({sender}, (STATE_REPORT, self.state))
+                pending.discard(sender)
 
+        # Decision depends ONLY on P_k's own state (cases 1-3).
         decision = self._termination_decision(self.state)
         self.logger.info(
-            'New coordinator %s collected states %s and broadcasts %s.',
+            'New coordinator %s (state %s) broadcasts %s.',
             self.participant,
-            sorted(observed_states),
+            self.state,
             decision,
         )
-        self.channel.send_to(all_participants, decision)
+        self.channel.send_to(others, decision)
         return decision
+
+    def _terminate_as_follower(self, leader, all_participants):
+        """Follower P_i: adopt P_k's state if earlier, then apply the outcome."""
+        leader_state = None
+
+        # Phase 1: receive P_k's announced state and synchronise.
+        msg = self.channel.receive_from({leader}, TIMEOUT * 3)
+        if msg and isinstance(msg[1], tuple) and msg[1][0] == STATE_REPORT:
+            leader_state = msg[1][1]
+            # Participants in an earlier state adopt P_k's state; participants
+            # in a later state keep theirs (they only ever move to ABORT on a
+            # GLOBAL_ABORT, README case 1).
+            if self._is_earlier(self.state, leader_state):
+                self._enter_state(leader_state)
+            # Acknowledge our (possibly adopted) state to P_k.
+            self.channel.send_to({leader}, (STATE_REPORT, self.state))
+
+        # Phase 2: apply the global decision broadcast by P_k.
+        msg = self.channel.receive_from(all_participants, TIMEOUT * 3)
+        if msg and msg[1] in (GLOBAL_COMMIT, GLOBAL_ABORT):
+            return msg[1]
+
+        # Broadcast missed: derive the SAME outcome from P_k's announced state.
+        # This is consistent by construction (identical to P_k's own decision),
+        # unlike a rule based on our own local state.
+        if leader_state is not None:
+            return self._termination_decision(leader_state)
+
+        # Neither state nor decision reached us: the new coordinator is also
+        # unreachable, i.e. multiple failures, which are out of scope
+        # (README 3.2 Abgrenzung). Abort as the safe default.
+        self.logger.warning(
+            'Participant %s could not reach new coordinator %s '
+            '(out of scope: multiple failures). Defaulting to GLOBAL_ABORT.',
+            self.participant,
+            leader,
+        )
+        return GLOBAL_ABORT
 
     def run(self):
         # Phase 1b: wait for VOTE_REQUEST and do local work
