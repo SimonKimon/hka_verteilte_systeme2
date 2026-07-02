@@ -124,6 +124,10 @@ class Participant:
         # Phase 1b: wait for VOTE_REQUEST and do local work
         msg = self.channel.receive_from(self.coordinator, TIMEOUT)
         if not msg:
+            self.logger.warning(
+                'Participant %s assumes coordinator crashed in state INIT (before VOTE_REQUEST).',
+                self.participant,
+            )
             self._enter_state('ABORT')
             return (
                 'Participant {} terminated in state ABORT. '
@@ -149,6 +153,10 @@ class Participant:
         # Phase 2b: expect PREPARE_COMMIT or GLOBAL_ABORT
         msg = self.channel.receive_from(self.coordinator, TIMEOUT)
         if not msg:
+            self.logger.warning(
+                'Participant %s assumes coordinator crashed in state WAIT (before PREPARE_COMMIT/GLOBAL_ABORT).',
+                self.participant,
+            )
             # Coordinator failed while participant is READY.
             decision = self._participant_termination_after_coordinator_failure()
             if decision == GLOBAL_COMMIT:
@@ -182,6 +190,10 @@ class Participant:
         msg = self.channel.receive_from(self.coordinator, TIMEOUT)
 
         if not msg:
+            self.logger.warning(
+                'Participant %s assumes coordinator crashed in state PRECOMMIT (before GLOBAL_COMMIT).',
+                self.participant,
+            )
             # Coordinator failed while participant is PRECOMMIT.
             decision = self._participant_termination_after_coordinator_failure()
             if decision == GLOBAL_ABORT:

@@ -20,7 +20,17 @@ def create_and_run(num_bits, proc_class, enter_bar, run_bar):
 
     # Barrier 2: ensure all nodes initialized before protocol starts.
     run_bar.wait()
-    logger.info(proc.run())
+    result = proc.run()
+
+    # Avoid duplicate crash output: coordinator already logs its crash as WARNING.
+    if (
+        proc_class.__name__ == 'Coordinator'
+        and isinstance(result, str)
+        and 'crashed in state' in result
+    ):
+        return
+
+    logger.info(result)
 
 
 if __name__ == '__main__':

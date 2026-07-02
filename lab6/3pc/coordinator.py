@@ -9,21 +9,6 @@ from const3PC import TIMEOUT
 
 
 class Coordinator:
-    """
-    Minimal 3PC coordinator.
-
-    The implementation intentionally focuses on the core 3PC state machine from
-    the lab handout:
-    INIT -> WAIT -> PRECOMMIT -> COMMIT
-                       |            |
-                       +-> ABORT ---+
-
-    Design choices for simplicity:
-    - no recovery protocol
-    - no message loss handling
-    - at most one timeout-based fail-noisy assumption
-    - state transitions are persisted to stable log for observability
-    """
 
     def __init__(self, chan):
         self.channel = chan
@@ -38,6 +23,14 @@ class Coordinator:
         self.logger.info('Coordinator %s entered state %s.', self.coordinator, state)
         self.state = state
 
+    def _crash(self):
+        self.logger.warning(
+            'Coordinator %s crashed in state %s.',
+            self.coordinator,
+            self.state,
+        )
+        return 'Coordinator {} crashed in state {}.'.format(self.coordinator, self.state)
+
     def init(self):
         self.channel.bind(self.coordinator)
         self.participants = self.channel.subgroup('participant')
@@ -46,7 +39,7 @@ class Coordinator:
     def run(self):
         # Optional crash simulation before protocol start.
         if random.random() > 9 / 10:
-            return 'Coordinator {} crashed in state INIT.'.format(self.coordinator)
+            return self._crash()
 
         # Phase 1a: ask all participants for vote
         self._enter_state('WAIT')
@@ -54,7 +47,7 @@ class Coordinator:
 
         # Crash in WAIT is the interesting case for leader-based termination.
         if random.random() > 3 / 4:
-            return 'Coordinator {} crashed in state WAIT.'.format(self.coordinator)
+            return self._crash()
 
         yet_to_receive = set(self.participants)
         while len(yet_to_receive) > 0:
@@ -79,7 +72,7 @@ class Coordinator:
 
         # Crash in PRECOMMIT should be resolved to COMMIT by participants.
         if random.random() > 2 / 3:
-            return 'Coordinator {} crashed in state PRECOMMIT.'.format(self.coordinator)
+            return self._crash()
 
         yet_to_receive = set(self.participants)
         while len(yet_to_receive) > 0:
